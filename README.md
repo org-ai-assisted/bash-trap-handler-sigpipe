@@ -7,8 +7,9 @@ code and skips its cleanup. `trap '' PIPE` at the top of the handler fixes it.
 ## Run
 
 Requires bash and GNU coreutils >= 8.31 (`env --default-signal`). An older,
-busybox or BSD `env` rejects that option: `repro` then prints
-`env: unrecognized option` and fails both cases without running the subject.
+busybox or BSD `env` rejects that option, so both cases report `UNEXPECTED`
+without the subject ever running -- that is a missing prerequisite, not a
+result about the bug.
 
     ./repro
 
