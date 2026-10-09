@@ -1,0 +1,87 @@
+#!/bin/bash
+
+## Copyright (C) 2026 - 2026 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+## See the file COPYING for copying conditions.
+
+## AI-Assisted
+
+## Runs demo-trap-handler with and without the fix while its stdout is a pipe
+## whose reader is already gone -- the state a script is in after
+## 'script | head --lines=1' consumed its line, or a pager was quit.
+##
+## Deterministic: the reader-less pipe is a FIFO opened read-write (so the
+## write side can open without blocking), then the read side is closed before
+## the subject runs. No sleeps, no races.
+##
+## Exit: 0 if both cases behave as documented (bug reproduced, fix works),
+##       1 otherwise.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o errtrace
+shopt -s inherit_errexit
+shopt -s shift_verbose
+export LC_ALL=C
+
+script_dir="$(dirname -- "$(readlink --canonicalize -- "${BASH_SOURCE[0]}")")"
+subject="${script_dir}/demo-trap-handler"
+
+scratch_dir="$(mktemp --directory)"
+fifo="${scratch_dir}/stdout.fifo"
+mkfifo -- "${fifo}"
+
+failures=0
+
+## run_case <mode> <expected-exit> <expected-dir-left: yes|no>
+run_case() {
+  local mode expected_exit expected_left work_dir read_fd write_fd exit_code left
+
+  mode="${1}"
+  expected_exit="${2}"
+  expected_left="${3}"
+  work_dir="${scratch_dir}/work${mode}"
+  mkdir -- "${work_dir}"
+
+  exec {read_fd}<>"${fifo}"
+  exec {write_fd}>"${fifo}"
+  exec {read_fd}<&-
+
+  exit_code=0
+  ## 'env --default-signal=PIPE': bash cannot un-ignore a signal ignored at
+  ## startup, so a caller that ignores SIGPIPE (some CI runners, Python
+  ## subprocess) would otherwise hide the bug.
+  env --default-signal=PIPE \
+    "${subject}" "${mode}" "${work_dir}" >&"${write_fd}" \
+    || exit_code="$?"
+  exec {write_fd}>&-
+
+  left='no'
+  if [ -d "${work_dir}" ]; then
+    left='yes'
+    rmdir -- "${work_dir}"
+  fi
+
+  printf '%-14s exit=%-3s work-dir-left=%-3s' "${mode}" "${exit_code}" "${left}"
+  if [ "${exit_code}" = "${expected_exit}" ] && [ "${left}" = "${expected_left}" ]; then
+    printf '%s\n' "  as expected"
+  else
+    printf '%s\n' "  UNEXPECTED (wanted exit=${expected_exit} work-dir-left=${expected_left})"
+    failures=$(( failures + 1 ))
+  fi
+}
+
+## Without the fix: killed by SIGPIPE (128 + 13 = 141), real code 3 lost,
+## cleanup skipped.
+run_case --without-fix 141 yes
+## With the fix: real exit code 3, cleanup ran.
+run_case --with-fix 3 no
+
+unlink -- "${fifo}"
+rmdir -- "${scratch_dir}"
+
+if [ "${failures}" -ne 0 ]; then
+  printf '%s\n' "FAIL: ${failures} case(s) did not behave as documented."
+  exit 1
+fi
+printf '%s\n' "OK: bug reproduced without the fix; fix verified."

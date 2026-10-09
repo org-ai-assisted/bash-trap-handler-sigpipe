@@ -1,0 +1,75 @@
+#!/bin/bash
+
+## Copyright (C) 2026 - 2026 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+## See the file COPYING for copying conditions.
+
+## AI-Assisted
+
+## Minimal model of a script with an error/exit handler that writes a
+## diagnostic to stdout, then cleans up, then exits with the real exit code.
+##
+## usage: demo-trap-handler --without-fix|--with-fix <work-dir>
+##
+## <work-dir> is an existing empty directory the script owns; the handler
+## removes it, so a directory left behind proves cleanup was skipped.
+## The simulated failure exits 3.
+
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o errtrace
+shopt -s inherit_errexit
+shopt -s shift_verbose
+export LC_ALL=C
+
+mode="${1:-}"
+work_dir="${2:-}"
+
+case "${mode}" in
+  --without-fix|--with-fix)
+    true
+    ;;
+  *)
+    printf '%s\n' "usage: ${0##*/} --without-fix|--with-fix <work-dir>" >&2
+    exit 2
+    ;;
+esac
+if [ ! -d "${work_dir}" ]; then
+  printf '%s\n' "${0##*/}: ERROR: not a directory: '${work_dir}'" >&2
+  exit 2
+fi
+
+handle_exit_trap() {
+  local exit_code="$?"
+
+  trap - ERR EXIT
+
+  if [ "${mode}" = '--with-fix' ]; then
+    ## THE FIX. Without it, the first write below to a stdout whose reader is
+    ## gone raises SIGPIPE, which kills bash outright (exit 141): the real exit
+    ## code is lost and the cleanup below never runs. 'set +o errexit' cannot
+    ## help -- a signal is not an error return.
+    trap '' PIPE
+  fi
+
+  ## style-ok: R-011 -- a terminal error handler must not abort on its own writes.
+  set +o errexit
+  set +o pipefail
+
+  printf '%s\n' "${0##*/}: aborted, exit code ${exit_code}."
+
+  rmdir -- "${work_dir}"
+
+  exit "${exit_code}"
+}
+
+trap handle_exit_trap ERR EXIT
+
+simulated_failure() {
+  return 3
+}
+
+## Silent work that fails. A real script would typically have printed a banner
+## earlier that the reader ('| head', a quit pager, a closed ssh session)
+## already consumed before it went away.
+simulated_failure
